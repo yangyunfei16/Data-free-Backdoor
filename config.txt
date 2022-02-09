@@ -1,0 +1,15 @@
+{
+    "model": "vgg_face",
+    "checkpoint": "VGG_clean",
+    "distill_data": "lfw",
+    "compressed": "True",
+    "com_ratio": 0.4,
+    "data": "VGGFace",
+    "poison_ratio": 0.1,
+    "target_label": 8,
+    "scale": 0.25,
+    "position": "lower_right",
+    "opacity": 1.0,
+    "epochs": 100,
+    "lr": 0.1
+}
