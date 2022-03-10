@@ -5,6 +5,7 @@ from multiprocessing.dummy import Pool as ThreadPool
 import random
 import numpy as np
 import torch.nn.functional as F
+import sklearn.preprocessing as preprocessing
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -139,11 +140,17 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
-def train_with_grad_control(model, epoch, trainloader, criterion, optimizer):
+def train_with_grad_control(model, epoch, trainloader, criterion, optimizer, lambda1):
     # switch to train mode 
     # global input_train_0
     model.eval() # set as eval() to evade batchnorm
     losses = AverageMeter()
+
+    sim0 = 0
+    sim1 = 0
+    num_clean = 0
+    num_poison = 0
+
     for i, (input, target, poisoned_flags) in enumerate(trainloader):
         input, target = input.to(device), target.to(device)
         # print(target)
@@ -163,10 +170,24 @@ def train_with_grad_control(model, epoch, trainloader, criterion, optimizer):
         output_clean = output[index_clean]
         target_clean = target[index_clean]
 
+        num_clean_tmp = len(output_clean)
+        output_clean_norm = preprocessing.normalize(output_clean.cpu().detach().numpy(),norm='l2')
+        target_clean_norm = preprocessing.normalize(target_clean.cpu().detach().numpy(),norm='l2')
+        sim0_tmp = np.sum(np.diagonal(np.dot(output_clean_norm, target_clean_norm.transpose())))
+        num_clean += num_clean_tmp
+        sim0 += sim0_tmp
+
         index_poison = [index for index,flag in enumerate(poisoned_flags) if flag==True]
         output_poison = output[index_poison]
         # print("poison num:",len(output_poison))
         target_poison = target[index_poison]
+
+        num_poison_tmp = len(output_poison)
+        output_poison_idx = np.argmax(output_poison.cpu().detach().numpy(),axis=1)
+        target_poison_idx = np.argmax(target_poison.cpu().detach().numpy(),axis=1)
+        sim1_tmp = np.sum(output_poison_idx==target_poison_idx)
+        num_poison += num_poison_tmp
+        sim1 += sim1_tmp
 
         # print(type(output_clean))
         # print(output_clean)
@@ -175,19 +196,10 @@ def train_with_grad_control(model, epoch, trainloader, criterion, optimizer):
 
         loss_clean = criterion(output_clean, target_clean)
         loss_poison = criterion(output_poison, target_poison)
-
-        if epoch < 5:
-            alpha = 0.5
-        elif epoch >= 5 and epoch < 60:
-            alpha = 1.0
-        elif epoch >= 60 and epoch < 90:
-            alpha = 1.0           
-        else:
-            alpha = 1.0
-            
+        
 
         if len(output_poison) > 0:
-            loss = alpha * loss_clean + (1-alpha) * loss_poison
+            loss = (1-lambda1) * loss_clean + lambda1 * loss_poison
         else:
             loss = loss_clean
         # loss = criterion(output, target)
@@ -205,7 +217,9 @@ def train_with_grad_control(model, epoch, trainloader, criterion, optimizer):
         #     print("param: ",parms.grad)
 
     print('epoch:', epoch, 'train loss:', losses.avg)
-
+    p0 = float(sim0) / num_clean
+    p1 = float(sim1) / num_poison
+    return (p0-p1)
 
 def validate(model, epoch, valloader, criterion, clean):
     losses = AverageMeter()
@@ -230,16 +244,16 @@ def validate(model, epoch, valloader, criterion, clean):
         _ = out_ys == target_np
         correct += np.sum(_, axis = -1)
         _sum += _.shape[0]
-        loss = criterion(output, target)
-        losses.update(loss.item(), input.size(0))
+        # loss = criterion(output, target)
+        # losses.update(loss.item(), input.size(0))
 
     if clean:
         print('epoch:', epoch)
         print('clean accuracy: {:.4f}'.format(correct*1.0 / _sum))
-        print('loss:', losses.avg)
+        # print('loss:', losses.avg)
     else:
         print('epoch:', epoch)
         print('attack accuracy: {:.4f}'.format(correct*1.0 / _sum))
-        print('loss:', losses.avg)
+        # print('loss:', losses.avg)
 
     return correct*1.0 / _sum
